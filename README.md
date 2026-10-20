@@ -1,5 +1,7 @@
 # dimtune
 
+[![CI](https://github.com/Abemilek/dimtune/actions/workflows/ci.yml/badge.svg)](https://github.com/Abemilek/dimtune/actions/workflows/ci.yml)
+
 An ultra-minimal music player written in Rust. Fixed dark theme, no animations,
 no network access, and no telemetry. It plays a local music folder, reads tags and
 embedded cover art, and stays out of the way.
