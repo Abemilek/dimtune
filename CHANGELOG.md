@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI now runs only for source code, tests, build configuration, and workflow file
   changes. Documentation-only changes no longer trigger a build.
 
+### Fixed
+
+- Track loading and seeking no longer run on the UI thread. A slow file or a
+  stalled audio device can no longer freeze the window or trigger a transient
+  “not responding” dialog.
+- Playback controls and progress repaint immediately after playback starts or
+  pauses.
+
 ## [0.2.0] - 2026-10-19
 
 ### Changed

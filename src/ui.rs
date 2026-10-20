@@ -12,6 +12,7 @@ const COVER_SIZE: f32 = 148.0;
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // — thread events —
+        self.poll_track_load(ctx);
         while let Ok(path) = self.folder_rx.try_recv() {
             self.choosing_folder = false;
             if path.is_dir() {
@@ -134,9 +135,9 @@ impl eframe::App for App {
                     self.drag_position = Some(value);
                 }
                 if (response.drag_stopped() || (response.changed() && !response.dragged()))
-                    && let (Some(player), Some(value)) = (&self.player, self.drag_position.take())
+                    && let Some(value) = self.drag_position.take()
                 {
-                    let _ = player.try_seek(Duration::from_secs_f32(value));
+                    self.seek(Duration::from_secs_f32(value), ctx);
                 }
                 ui.label(
                     duration
@@ -151,9 +152,18 @@ impl eframe::App for App {
                     self.skip_next = false;
                     self.previous_track(ctx);
                 }
-                let label = if playing { "Pause" } else { "Play" };
+                let label = if self.loading_track {
+                    "Loading…"
+                } else if playing {
+                    "Pause"
+                } else {
+                    "Play"
+                };
                 if ui
-                    .add(egui::Button::new(label).min_size(egui::vec2(96.0, 0.0)))
+                    .add_enabled(
+                        !self.loading_track,
+                        egui::Button::new(label).min_size(egui::vec2(96.0, 0.0)),
+                    )
                     .clicked()
                 {
                     self.toggle_pause(ctx);
@@ -235,7 +245,7 @@ impl eframe::App for App {
                         ui.label(RichText::new("Nothing playing").weak());
                     }
                     ui.add_space(8.0);
-                    if self.loading {
+                    if self.loading || self.loading_track {
                         ui.label(RichText::new("Loading…").weak());
                     } else if !self.status.is_empty() {
                         ui.add(
@@ -292,8 +302,13 @@ impl eframe::App for App {
             }
         });
 
-        // Only wake up periodically while playing (progress + next track).
-        if playing {
+        // Keep progress and automatic track changes moving. Recompute this after
+        // the UI so starting playback from a click also schedules the next frame.
+        let playing_now = self
+            .player
+            .as_ref()
+            .is_some_and(|player| !player.is_paused());
+        if playing_now || self.loading_track {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }

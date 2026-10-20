@@ -1,5 +1,7 @@
 use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -12,11 +14,19 @@ use crate::metadata::{Metadata, read_metadata};
 use crate::style::apply_style;
 use crate::util::Rng;
 
+type TrackDecoder = Decoder<BufReader<File>>;
+
+struct TrackLoad {
+    generation: u64,
+    path: PathBuf,
+    result: Result<TrackDecoder, String>,
+}
+
 pub(crate) struct App {
     pub(crate) config: Config,
     // Audio (the sink must stay alive while something is playing)
     sink: Option<MixerDeviceSink>,
-    pub(crate) player: Option<Player>,
+    pub(crate) player: Option<Arc<Player>>,
     // Playlist
     pub(crate) folder: Option<PathBuf>,
     pub(crate) tracks: Vec<PathBuf>,
@@ -38,6 +48,9 @@ pub(crate) struct App {
     pub(crate) scan_generation: u64,
     pub(crate) meta_rx: Receiver<Metadata>,
     meta_tx: Sender<Metadata>,
+    track_rx: Receiver<TrackLoad>,
+    track_tx: Sender<TrackLoad>,
+    pub(crate) loading_track: bool,
     pub(crate) drag_position: Option<f32>,
     pub(crate) scroll_to_current: bool,
     pub(crate) consecutive_failures: usize,
@@ -52,6 +65,7 @@ impl App {
         let (folder_tx, folder_rx) = mpsc::channel();
         let (scan_tx, scan_rx) = mpsc::channel();
         let (meta_tx, meta_rx) = mpsc::channel();
+        let (track_tx, track_rx) = mpsc::channel();
         let mut app = App {
             sink: None,
             player: None,
@@ -73,6 +87,9 @@ impl App {
             scan_generation: 0,
             meta_rx,
             meta_tx,
+            track_rx,
+            track_tx,
+            loading_track: false,
             drag_position: None,
             scroll_to_current: false,
             consecutive_failures: 0,
@@ -137,7 +154,9 @@ impl App {
     }
 
     fn stop(&mut self) {
-        self.player = None;
+        if let Some(player) = self.player.take() {
+            player.stop();
+        }
         self.current = None;
         self.metadata = None;
         self.cover = None;
@@ -145,6 +164,7 @@ impl App {
         self.scroll_to_current = false;
         self.consecutive_failures = 0;
         self.skip_next = false;
+        self.loading_track = false;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -174,30 +194,58 @@ impl App {
         )));
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
-        self.player = None;
+        if let Some(player) = self.player.take() {
+            player.stop();
+        }
         self.current = Some(index);
         self.metadata = None;
         self.cover = None;
         self.drag_position = None;
         self.skip_next = false;
         self.status.clear();
+        self.loading_track = true;
+
+        // Opening and probing an audio file can block on a slow disk, a network
+        // mount, or a busy system. Keep that work off the UI thread.
+        let tx = self.track_tx.clone();
+        let context = ctx.clone();
+        std::thread::spawn(move || {
+            let result = File::open(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|file| Decoder::try_from(file).map_err(|e| e.to_string()));
+            let _ = tx.send(TrackLoad {
+                generation,
+                path,
+                result,
+            });
+            context.request_repaint();
+        });
+        ctx.request_repaint();
+    }
+
+    /// Collects the result of a track opened by the background loader.
+    pub(crate) fn poll_track_load(&mut self, ctx: &egui::Context) {
+        while let Ok(load) = self.track_rx.try_recv() {
+            if load.generation != self.generation {
+                continue;
+            }
+            self.loading_track = false;
+            match load.result {
+                Ok(decoder) => self.start_decoder(load.path, decoder, ctx),
+                Err(error) => {
+                    self.status = format!("Could not play {}: {error}", track_name(&load.path));
+                    self.consecutive_failures += 1;
+                    self.skip_next = true;
+                    ctx.request_repaint();
+                }
+            }
+        }
+    }
+
+    fn start_decoder(&mut self, path: PathBuf, decoder: TrackDecoder, ctx: &egui::Context) {
         if !self.ensure_output() {
             return;
         }
-        let decoder = File::open(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|file| Decoder::try_from(file).map_err(|e| e.to_string()));
-        let decoder = match decoder {
-            Ok(decoder) => decoder,
-            Err(error) => {
-                self.status = format!("Could not play {}: {error}", track_name(&path));
-                self.consecutive_failures += 1;
-                self.skip_next = true;
-                ctx.request_repaint();
-                return;
-            }
-        };
-        self.consecutive_failures = 0;
         let Some(sink) = self.sink.as_ref() else {
             return;
         };
@@ -205,13 +253,16 @@ impl App {
         player.set_volume(self.config.volume);
         player.append(decoder);
         // The previous player (if any) stops when dropped.
-        self.player = Some(player);
+        self.player = Some(Arc::new(player));
+        self.consecutive_failures = 0;
         self.scroll_to_current = true;
+        let generation = self.generation;
         let (tx, context) = (self.meta_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
             let _ = tx.send(read_metadata(generation, &path));
             context.request_repaint();
         });
+        ctx.request_repaint();
     }
 
     fn play_position(&mut self, pos: usize, ctx: &egui::Context) {
@@ -247,10 +298,12 @@ impl App {
             return;
         }
         // If the track has already played for a few seconds, restart it.
-        if let Some(player) = &self.player
-            && player.get_pos() > Duration::from_secs(4)
+        if self
+            .player
+            .as_ref()
+            .is_some_and(|player| player.get_pos() > Duration::from_secs(4))
         {
-            let _ = player.try_seek(Duration::ZERO);
+            self.seek(Duration::ZERO, ctx);
             return;
         }
         let pos = if self.pos == 0 {
@@ -261,7 +314,24 @@ impl App {
         self.play_position(pos, ctx);
     }
 
+    /// Seeks in the background because rodio waits for the audio callback.
+    /// A stalled audio device must never freeze the UI thread.
+    pub(crate) fn seek(&self, position: Duration, ctx: &egui::Context) {
+        let Some(player) = &self.player else {
+            return;
+        };
+        let player = Arc::clone(player);
+        let context = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = player.try_seek(position);
+            context.request_repaint();
+        });
+    }
+
     pub(crate) fn toggle_pause(&mut self, ctx: &egui::Context) {
+        if self.loading_track {
+            return;
+        }
         match &self.player {
             Some(player) => {
                 if player.is_paused() {
@@ -282,6 +352,8 @@ impl App {
                 }
             }
         }
+        // Make sure the new Play/Pause label is painted even if the app is idle.
+        ctx.request_repaint();
     }
 
     pub(crate) fn choose_folder(&mut self, ctx: &egui::Context) {
