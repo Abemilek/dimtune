@@ -124,12 +124,14 @@ release you downloaded:
 
 ```sh
 VERSION=v0.1.0
-tar -xzf "dimtune-${VERSION}-x86_64-linux.tar.gz"
+PKG="dimtune-${VERSION}-x86_64-linux"
 
-install -Dm755 "dimtune-${VERSION}/dimtune" "$HOME/.local/bin/dimtune"
-install -Dm644 "dimtune-${VERSION}/dimtune.desktop" \
+tar -xzf "${PKG}.tar.gz"
+
+install -Dm755 "${PKG}/dimtune" "$HOME/.local/bin/dimtune"
+install -Dm644 "${PKG}/dimtune.desktop" \
   "$HOME/.local/share/applications/dimtune.desktop"
-install -Dm644 "dimtune-${VERSION}/dimtune.svg" \
+install -Dm644 "${PKG}/dimtune.svg" \
   "$HOME/.local/share/icons/hicolor/scalable/apps/dimtune.svg"
 
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
