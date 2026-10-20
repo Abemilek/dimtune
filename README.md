@@ -145,7 +145,7 @@ prebuilt x86_64 Linux tarball produced by GitHub Actions. Set `VERSION` to the
 release you downloaded:
 
 ```sh
-VERSION=v0.2.0
+VERSION=v0.2.1
 PKG="dimtune-${VERSION}-x86_64-linux"
 
 tar -xzf "${PKG}.tar.gz"
