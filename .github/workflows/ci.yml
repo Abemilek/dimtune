@@ -3,7 +3,33 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'benches/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - 'clippy.toml'
+      - '.cargo/**'
+      - '.github/workflows/**'
   pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'benches/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - 'clippy.toml'
+      - '.cargo/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:

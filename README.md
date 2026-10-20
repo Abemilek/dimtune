@@ -213,6 +213,10 @@ The test suite covers duration formatting, file-name handling, shuffle
 permutation correctness, config parsing, recursive scanning, and case-insensitive
 folder covers.
 
+CI runs only when source code, tests, build configuration, or workflow files
+change. Documentation-only changes (README, CHANGELOG, LICENSE, `docs/`, and
+similar files) do not trigger a build.
+
 ## Usage
 
 - On first launch, dimtune uses the XDG music folder (for example `~/Music`) and
@@ -318,7 +322,18 @@ that system (or in a matching container) instead of copying the binary.
 
 ## How it works
 
-`src/main.rs` is intentionally a small, single-file application:
+The source is split into small modules by responsibility:
+
+- **`main.rs`:** entry point and window options.
+- **`app.rs`:** application state, playback controls, and background events.
+- **`config.rs`:** XDG paths and loading/saving the configuration.
+- **`library.rs`:** recursive folder scanning and track names.
+- **`metadata.rs`:** tags, duration, and cover art.
+- **`style.rs`:** fixed dark theme and spacing.
+- **`ui.rs`:** egui layout, shortcuts, and the `eframe::App` implementation.
+- **`util.rs`:** duration formatting and the shuffle RNG.
+
+Implementation notes:
 
 - **UI:** `eframe`/`egui` with the `glow` OpenGL renderer, built for both Wayland
   and X11. The theme is a fixed dark palette with animations disabled.
@@ -337,7 +352,15 @@ Project layout:
 
 ```
 Cargo.toml
-src/main.rs
+src/
+  main.rs            # entry point
+  app.rs             # state and playback controls
+  config.rs          # configuration and XDG paths
+  library.rs         # folder scanning and track names
+  metadata.rs        # tags and cover art
+  style.rs           # dark theme
+  ui.rs              # egui layout and shortcuts
+  util.rs            # duration formatting and RNG
 install.sh           # build + per-user install
 uninstall.sh         # per-user uninstall
 dimtune.desktop      # desktop entry

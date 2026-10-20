@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Screenshot of the application in the README.
 - This changelog.
 
+### Changed
+
+- Split the monolithic `src/main.rs` into focused modules: `app`, `config`,
+  `library`, `metadata`, `style`, `ui`, and `util`.
+- CI now runs only for source code, tests, build configuration, and workflow file
+  changes. Documentation-only changes no longer trigger a build.
+
 ## [0.2.0] - 2026-10-19
 
 ### Changed
