@@ -1,0 +1,3 @@
+/target
+# Local helper with the repository URL; not part of the project.
+/repo.txt

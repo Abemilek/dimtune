@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=dimtune
+Comment=Minimalist music player
+Exec=dimtune
+Icon=dimtune
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=dimtune
