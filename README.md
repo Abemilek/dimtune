@@ -9,6 +9,7 @@
 <p align="center">
   <a href="https://github.com/Abemilek/dimtune/actions/workflows/ci.yml"><img src="https://github.com/Abemilek/dimtune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Abemilek/dimtune/releases"><img src="https://img.shields.io/github/v/release/Abemilek/dimtune?display_name=tag" alt="Latest release"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-view-blue" alt="Changelog"></a>
   <img src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust" alt="Rust 1.89+">
   <img src="https://img.shields.io/badge/UI-egui-1f425f" alt="egui">
   <img src="https://img.shields.io/badge/audio-rodio-blue" alt="rodio">
@@ -24,6 +25,14 @@ the way. The entire application and its documentation are in English.
 Tested on **Debian 13 (Trixie) + GNOME + Wayland**, but it is **not** tied to that
 environment. It runs on other Linux distributions and desktop environments as long
 as the requirements below are met.
+
+## Screenshot
+
+<p align="center">
+  <img src="docs/screenshot.png" width="760" alt="dimtune playing a demo album">
+</p>
+
+The screenshot uses a fictional demo library; no personal files are included.
 
 ## Features
 
@@ -333,8 +342,14 @@ install.sh           # build + per-user install
 uninstall.sh         # per-user uninstall
 dimtune.desktop      # desktop entry
 dimtune.svg          # application icon
+docs/screenshot.png  # README screenshot
+CHANGELOG.md         # version history
 .github/workflows/   # CI and tagged release automation
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ## License
 
