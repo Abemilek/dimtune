@@ -1,6 +1,6 @@
 [package]
 name = "dimtune"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "An ultra-minimal music player with a dark UI, no network, and no telemetry"
@@ -11,15 +11,15 @@ keywords = ["music", "player", "audio", "egui", "minimal"]
 categories = ["multimedia::audio"]
 
 [dependencies]
-# Interfaz (Rust puro; Wayland y X11, render por OpenGL/glow)
+# UI (pure Rust; Wayland and X11, OpenGL/glow rendering)
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-# Audio: rodio (cpal/ALSA -> PipeWire en Debian 13) con decodificadores symphonia (Rust puro)
+# Audio: rodio (cpal/ALSA -> PipeWire) with Symphonia decoders (pure Rust)
 rodio = { version = "0.23", default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav", "mp4"] }
-# Etiquetas y portadas incrustadas
+# Tags and embedded cover art
 lofty = "0.25"
-# Portadas: solo jpeg y png
+# Covers: JPEG and PNG only
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-# Selector de carpeta nativo vía xdg-desktop-portal (GNOME)
+# Native folder picker via xdg-desktop-portal
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "wayland"] }
 
 [profile.release]

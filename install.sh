@@ -9,7 +9,7 @@ mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" \
 install -m755 target/release/dimtune "$HOME/.local/bin/dimtune"
 install -m644 dimtune.svg "$HOME/.local/share/icons/hicolor/scalable/apps/dimtune.svg"
 bin="$HOME/.local/bin/dimtune"
-bin_escapado=$(printf '%s\n' "$bin" | sed 's/[\\&|]/\\&/g')
-sed "s|^Exec=.*|Exec=\"$bin_escapado\"|" dimtune.desktop > "$HOME/.local/share/applications/dimtune.desktop"
+escaped_bin=$(printf '%s\n' "$bin" | sed 's/[\\&|]/\\&/g')
+sed "s|^Exec=.*|Exec=\"$escaped_bin\"|" dimtune.desktop > "$HOME/.local/share/applications/dimtune.desktop"
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 echo "Done: look for \"dimtune\" in the application menu or run $bin"

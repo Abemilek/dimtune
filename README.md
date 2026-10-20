@@ -1,10 +1,25 @@
-# dimtune
+<p align="center">
+  <img src="dimtune.svg" width="128" height="128" alt="dimtune icon">
+</p>
 
-[![CI](https://github.com/Abemilek/dimtune/actions/workflows/ci.yml/badge.svg)](https://github.com/Abemilek/dimtune/actions/workflows/ci.yml)
+<h1 align="center">dimtune</h1>
 
-An ultra-minimal music player written in Rust. Fixed dark theme, no animations,
-no network access, and no telemetry. It plays a local music folder, reads tags and
-embedded cover art, and stays out of the way.
+<p align="center"><strong>A tiny, native music player for Linux, written in Rust.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/Abemilek/dimtune/actions/workflows/ci.yml"><img src="https://github.com/Abemilek/dimtune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Abemilek/dimtune/releases"><img src="https://img.shields.io/github/v/release/Abemilek/dimtune?display_name=tag" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust" alt="Rust 1.89+">
+  <img src="https://img.shields.io/badge/UI-egui-1f425f" alt="egui">
+  <img src="https://img.shields.io/badge/audio-rodio-blue" alt="rodio">
+  <img src="https://img.shields.io/badge/session-Wayland%20%7C%20X11-blueviolet" alt="Wayland and X11">
+  <img src="https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white" alt="Linux">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+</p>
+
+Fixed dark theme, no animations, no network access, and no telemetry. dimtune
+plays a local music folder, reads tags and embedded cover art, and stays out of
+the way. The entire application and its documentation are in English.
 
 Tested on **Debian 13 (Trixie) + GNOME + Wayland**, but it is **not** tied to that
 environment. It runs on other Linux distributions and desktop environments as long
@@ -20,10 +35,8 @@ as the requirements below are met.
 - Shuffle mode, automatic next track, seek bar, volume control, and keyboard
   shortcuts.
 - Remembers the last folder, shuffle state, and volume.
-- Single small native binary. No web view, no runtime services, no network.
+- Single small native binary. No web view, no background daemon, no network.
 - Per-user install; no `sudo` required to install the app itself.
-
-The user interface is currently in Spanish.
 
 ## Platform support
 
@@ -92,7 +105,7 @@ rustc --version   # must be 1.89 or newer
   KDE), PulseAudio, or direct ALSA. On Debian/Ubuntu with PipeWire, install
   `pipewire-alsa` so ALSA applications are routed through PipeWire.
 - `xdg-desktop-portal` plus the backend for your desktop, used by the
-  "Carpeta…" (Folder…) button. GNOME uses `xdg-desktop-portal-gnome`; KDE uses
+  "Folder…" button. GNOME uses `xdg-desktop-portal-gnome`; KDE uses
   `xdg-desktop-portal-kde`; GTK-based desktops can use `xdg-desktop-portal-gtk`.
 
 On Debian 13 / Ubuntu / Linux Mint:
@@ -123,7 +136,7 @@ prebuilt x86_64 Linux tarball produced by GitHub Actions. Set `VERSION` to the
 release you downloaded:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.2.0
 PKG="dimtune-${VERSION}-x86_64-linux"
 
 tar -xzf "${PKG}.tar.gz"
@@ -146,7 +159,7 @@ Release archives include the binary, desktop entry, icon, README, and license. A
 ```sh
 git clone https://github.com/Abemilek/dimtune.git
 cd dimtune
-./instalar.sh
+./install.sh
 ```
 
 The install script builds the release binary and installs only for the current
@@ -193,17 +206,16 @@ folder covers.
 
 ## Usage
 
-- On first launch, dimtune uses the XDG music folder (for example `~/Music`, or
-  `~/Música` on a Spanish Debian system) and scans it recursively. On later
-  launches it reopens the last folder you chose.
-- **Carpeta…** (Folder…) selects another folder. Subfolders are included.
+- On first launch, dimtune uses the XDG music folder (for example `~/Music`) and
+  scans it recursively. On later launches it reopens the last folder you chose.
+- **Folder…** selects another folder. Subfolders are included.
 - Click a track in the list to play it. When a track ends, the next one starts
   automatically.
-- **Aleatorio** (Shuffle) shuffles the playback order; turn it off for
-  alphabetical order. At the end of the list, playback wraps around.
-- **Anterior** (Previous) restarts the current track if it has played for more
-  than 4 seconds; otherwise it goes to the previous track.
-- **Vol** (Volume) is applied live and saved when you release the slider.
+- **Shuffle** shuffles the playback order; turn it off for alphabetical order.
+  At the end of the list, playback wraps around.
+- **Previous** restarts the current track if it has played for more than 4
+  seconds; otherwise it goes to the previous track.
+- **Vol** is applied live and saved when you release the slider.
 
 Keyboard shortcuts:
 
@@ -231,9 +243,9 @@ $XDG_CONFIG_HOME/dimtune/config
 ```
 
 ```ini
-carpeta=/home/user/Music
-aleatorio=0
-volumen=0.80
+folder=/home/user/Music
+shuffle=0
+volume=0.80
 ```
 
 No cache, history, play counts, or telemetry are written anywhere else.
@@ -241,7 +253,7 @@ No cache, history, play counts, or telemetry are written anywhere else.
 ## Uninstall
 
 ```sh
-./desinstalar.sh
+./uninstall.sh
 ```
 
 This removes the binary, desktop entry, icon, and `~/.config/dimtune`.
@@ -317,8 +329,8 @@ Project layout:
 ```
 Cargo.toml
 src/main.rs
-instalar.sh          # build + per-user install
-desinstalar.sh       # per-user uninstall
+install.sh           # build + per-user install
+uninstall.sh         # per-user uninstall
 dimtune.desktop      # desktop entry
 dimtune.svg          # application icon
 .github/workflows/   # CI and tagged release automation

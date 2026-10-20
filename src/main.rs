@@ -1,5 +1,5 @@
-//! dimtune — reproductor de música ultraminimalista.
-//! Modo oscuro fijo, sin animaciones, sin red, sin telemetría.
+//! dimtune — an ultra-minimal music player.
+//! Fixed dark theme, no animations, no network, no telemetry.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -11,11 +11,11 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
 
-const EXTENSIONES: [&str; 5] = ["mp3", "flac", "ogg", "wav", "m4a"];
-const FILA_ALTO: f32 = 22.0;
-const LADO_PORTADA: f32 = 148.0;
+const EXTENSIONS: [&str; 5] = ["mp3", "flac", "ogg", "wav", "m4a"];
+const ROW_HEIGHT: f32 = 22.0;
+const COVER_SIZE: f32 = 148.0;
 
-// ───────────────────────────── utilidades ─────────────────────────────
+// ───────────────────────────── utilities ─────────────────────────────
 
 fn home() -> PathBuf {
     std::env::var_os("HOME")
@@ -24,156 +24,161 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-fn dir_config_base() -> PathBuf {
+fn config_base_dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home().join(".config"))
 }
 
-fn ruta_config() -> PathBuf {
-    dir_config_base().join("dimtune").join("config")
+fn config_path() -> PathBuf {
+    config_base_dir().join("dimtune").join("config")
 }
 
-/// Carpeta de música del usuario (XDG), p. ej. ~/Música en Debian en español.
-/// Si no hay una carpeta válida, usa ~/Music aunque no exista: escanear todo
-/// el home por defecto sería demasiado caro y sorprendente.
-fn carpeta_musica_por_defecto() -> PathBuf {
-    let casa = home();
-    let dirs = dir_config_base().join("user-dirs.dirs");
-    if let Ok(txt) = std::fs::read_to_string(dirs) {
-        for linea in txt.lines() {
-            if let Some(v) = linea.trim().strip_prefix("XDG_MUSIC_DIR=") {
-                let v = v
+/// The user's XDG music folder, for example ~/Music or its localized name.
+/// If there is no valid folder, fall back to ~/Music even if it does not exist:
+/// scanning the whole home directory by default would be too expensive and surprising.
+fn default_music_folder() -> PathBuf {
+    let home_dir = home();
+    let dirs = config_base_dir().join("user-dirs.dirs");
+    if let Ok(text) = std::fs::read_to_string(dirs) {
+        for line in text.lines() {
+            if let Some(value) = line.trim().strip_prefix("XDG_MUSIC_DIR=") {
+                let value = value
                     .trim()
                     .trim_matches('"')
-                    .replace("$HOME", &casa.to_string_lossy());
-                let p = PathBuf::from(v);
-                if p.is_dir() && p != casa {
-                    return p;
+                    .replace("$HOME", &home_dir.to_string_lossy());
+                let path = PathBuf::from(value);
+                if path.is_dir() && path != home_dir {
+                    return path;
                 }
             }
         }
     }
-    casa.join("Music")
+    home_dir.join("Music")
 }
 
 struct Config {
-    carpeta: Option<PathBuf>,
-    aleatorio: bool,
-    volumen: f32,
+    folder: Option<PathBuf>,
+    shuffle: bool,
+    volume: f32,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            carpeta: None,
-            aleatorio: false,
-            volumen: 0.8,
+            folder: None,
+            shuffle: false,
+            volume: 0.8,
         }
     }
 }
 
 impl Config {
-    fn cargar() -> Self {
-        std::fs::read_to_string(ruta_config())
-            .map(|txt| Self::desde_texto(&txt))
+    fn load() -> Self {
+        std::fs::read_to_string(config_path())
+            .map(|text| Self::from_text(&text))
             .unwrap_or_default()
     }
 
-    fn desde_texto(txt: &str) -> Self {
-        let mut c = Self::default();
-        for l in txt.lines() {
-            if let Some((k, v)) = l.split_once('=') {
-                match k.trim() {
-                    "carpeta" if !v.trim().is_empty() => c.carpeta = Some(PathBuf::from(v.trim())),
-                    "aleatorio" => c.aleatorio = v.trim() == "1",
-                    "volumen" => {
-                        if let Ok(x) = v.trim().parse::<f32>()
-                            && x.is_finite()
+    fn from_text(text: &str) -> Self {
+        let mut config = Self::default();
+        for line in text.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                match key.trim() {
+                    "folder" if !value.trim().is_empty() => {
+                        config.folder = Some(PathBuf::from(value.trim()))
+                    }
+                    "shuffle" => config.shuffle = value.trim() == "1",
+                    "volume" => {
+                        if let Ok(number) = value.trim().parse::<f32>()
+                            && number.is_finite()
                         {
-                            c.volumen = x.clamp(0.0, 1.0);
+                            config.volume = number.clamp(0.0, 1.0);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        c
+        config
     }
 
-    fn guardar(&self) {
-        let ruta = ruta_config();
-        if let Some(dir) = ruta.parent() {
+    fn save(&self) {
+        let path = config_path();
+        if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let carpeta = self
-            .carpeta
+        let folder = self
+            .folder
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let txt = format!(
-            "carpeta={}\naleatorio={}\nvolumen={:.2}\n",
-            carpeta,
-            if self.aleatorio { 1 } else { 0 },
-            self.volumen
+        let text = format!(
+            "folder={}\nshuffle={}\nvolume={:.2}\n",
+            folder,
+            if self.shuffle { 1 } else { 0 },
+            self.volume
         );
-        // Escribir en un temporal y renombrar evita dejar el archivo a medias.
-        let temporal = ruta.with_extension(format!("tmp{}", std::process::id()));
-        if std::fs::write(&temporal, txt).is_ok() {
-            if std::fs::rename(&temporal, &ruta).is_err() {
-                let _ = std::fs::remove_file(&temporal);
+        // Writing to a temporary file and renaming avoids leaving a partial file.
+        let temp = path.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::write(&temp, text).is_ok() {
+            if std::fs::rename(&temp, &path).is_err() {
+                let _ = std::fs::remove_file(&temp);
             }
         } else {
-            let _ = std::fs::remove_file(&temporal);
+            let _ = std::fs::remove_file(&temp);
         }
     }
 }
 
-fn escanear(dir: &Path, salida: &mut Vec<PathBuf>, profundidad: u32) {
-    if profundidad > 12 {
+fn scan(dir: &Path, out: &mut Vec<PathBuf>, depth: u32) {
+    if depth > 12 {
         return;
     }
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    for e in rd.flatten() {
-        let p = e.path();
-        let Ok(ft) = e.file_type() else { continue };
-        if ft.is_dir() {
-            escanear(&p, salida, profundidad + 1);
-        } else if p
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            scan(&path, out, depth + 1);
+        } else if path
             .extension()
-            .and_then(|x| x.to_str())
-            .is_some_and(|x| EXTENSIONES.contains(&x.to_ascii_lowercase().as_str()))
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
         {
-            salida.push(p);
+            out.push(path);
         }
     }
 }
 
-fn formatear(d: Duration) -> String {
-    let s = d.as_secs();
-    let (h, m, seg) = (s / 3600, (s % 3600) / 60, s % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{seg:02}")
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let (hours, minutes, secs) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{secs:02}")
     } else {
-        format!("{m}:{seg:02}")
+        format!("{minutes}:{secs:02}")
     }
 }
 
-/// Generador pseudoaleatorio mínimo (xorshift64), sin dependencias.
-struct Azar(u64);
+/// Minimal pseudo-random generator (xorshift64), no dependencies.
+struct Rng(u64);
 
-impl Azar {
-    fn nuevo() -> Self {
-        let n = SystemTime::now()
+impl Rng {
+    fn new() -> Self {
+        let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(1);
-        Azar(n | 1)
+        Rng(seed | 1)
     }
-    fn siguiente(&mut self) -> u64 {
+
+    fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -181,59 +186,63 @@ impl Azar {
         self.0 = x;
         x
     }
-    fn mezclar(&mut self, v: &mut [usize]) {
-        for i in (1..v.len()).rev() {
-            let j = (self.siguiente() % (i as u64 + 1)) as usize;
-            v.swap(i, j);
+
+    fn shuffle(&mut self, values: &mut [usize]) {
+        for i in (1..values.len()).rev() {
+            let j = (self.next() % (i as u64 + 1)) as usize;
+            values.swap(i, j);
         }
     }
 }
 
-// ─────────────────────── metadatos y portada (hilo) ───────────────────────
+// ─────────────────────── metadata and cover (thread) ───────────────────────
 
-struct Meta {
-    generacion: u64,
-    titulo: Option<String>,
-    artista: Option<String>,
+struct Metadata {
+    generation: u64,
+    title: Option<String>,
+    artist: Option<String>,
     album: Option<String>,
-    duracion: Option<Duration>,
-    portada: Option<ColorImage>,
+    duration: Option<Duration>,
+    cover: Option<ColorImage>,
 }
 
-struct ResultadoEscaneo {
-    generacion: u64,
-    carpeta: PathBuf,
-    pistas: Vec<PathBuf>,
+struct ScanResult {
+    generation: u64,
+    folder: PathBuf,
+    tracks: Vec<PathBuf>,
 }
 
-fn decodificar_portada(bytes: &[u8]) -> Option<ColorImage> {
-    let img = image::load_from_memory(bytes).ok()?;
-    let img = img.thumbnail(320, 320).to_rgba8();
-    let tam = [img.width() as usize, img.height() as usize];
-    Some(ColorImage::from_rgba_unmultiplied(tam, img.as_raw()))
+fn decode_cover(bytes: &[u8]) -> Option<ColorImage> {
+    let image = image::load_from_memory(bytes).ok()?;
+    let image = image.thumbnail(320, 320).to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    Some(ColorImage::from_rgba_unmultiplied(size, image.as_raw()))
 }
 
-fn portada_de_carpeta(archivo: &Path) -> Option<ColorImage> {
-    let dir = archivo.parent()?;
-    let entradas: Vec<PathBuf> = std::fs::read_dir(dir)
+fn folder_cover(file: &Path) -> Option<ColorImage> {
+    let dir = file.parent()?;
+    let entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .map(|e| e.path())
+        .map(|entry| entry.path())
         .collect();
-    for nombre in ["cover", "folder", "front", "album"] {
-        for ext in ["jpg", "jpeg", "png"] {
-            for p in &entradas {
-                let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+    for name in ["cover", "folder", "front", "album"] {
+        for extension in ["jpg", "jpeg", "png"] {
+            for path in &entries {
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                let Some(extension) = p.extension().and_then(|s| s.to_str()) else {
+                let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if !stem.eq_ignore_ascii_case(nombre) || !extension.eq_ignore_ascii_case(ext) {
+                if !stem.eq_ignore_ascii_case(name) || !ext.eq_ignore_ascii_case(extension) {
                     continue;
                 }
-                if let Some(img) = std::fs::read(p).ok().and_then(|b| decodificar_portada(&b)) {
-                    return Some(img);
+                if let Some(image) = std::fs::read(path)
+                    .ok()
+                    .and_then(|bytes| decode_cover(&bytes))
+                {
+                    return Some(image);
                 }
             }
         }
@@ -241,192 +250,195 @@ fn portada_de_carpeta(archivo: &Path) -> Option<ColorImage> {
     None
 }
 
-fn leer_meta(generacion: u64, ruta: &Path) -> Meta {
-    let mut m = Meta {
-        generacion,
-        titulo: None,
-        artista: None,
+fn read_metadata(generation: u64, path: &Path) -> Metadata {
+    let mut metadata = Metadata {
+        generation,
+        title: None,
+        artist: None,
         album: None,
-        duracion: None,
-        portada: None,
+        duration: None,
+        cover: None,
     };
-    if let Ok(tf) = lofty::read_from_path(ruta) {
-        let d = tf.properties().duration();
-        if !d.is_zero() {
-            m.duracion = Some(d);
+    if let Ok(tagged_file) = lofty::read_from_path(path) {
+        let duration = tagged_file.properties().duration();
+        if !duration.is_zero() {
+            metadata.duration = Some(duration);
         }
-        if let Some(tag) = tf.primary_tag().or_else(|| tf.first_tag()) {
-            m.titulo = tag
+        if let Some(tag) = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())
+        {
+            metadata.title = tag
                 .title()
                 .map(|s| s.into_owned())
                 .filter(|s| !s.trim().is_empty());
-            m.artista = tag
+            metadata.artist = tag
                 .artist()
                 .map(|s| s.into_owned())
                 .filter(|s| !s.trim().is_empty());
-            m.album = tag
+            metadata.album = tag
                 .album()
                 .map(|s| s.into_owned())
                 .filter(|s| !s.trim().is_empty());
-            m.portada = tag
+            metadata.cover = tag
                 .pictures()
                 .iter()
-                .find_map(|p| decodificar_portada(p.data()));
+                .find_map(|picture| decode_cover(picture.data()));
         }
     }
-    if m.portada.is_none() {
-        m.portada = portada_de_carpeta(ruta);
+    if metadata.cover.is_none() {
+        metadata.cover = folder_cover(path);
     }
-    m
+    metadata
 }
 
 // ───────────────────────────────── app ─────────────────────────────────
 
 struct App {
     config: Config,
-    // Audio (el sink debe vivir mientras suene algo)
+    // Audio (the sink must stay alive while something is playing)
     sink: Option<MixerDeviceSink>,
     player: Option<Player>,
-    // Lista
-    carpeta: Option<PathBuf>,
-    pistas: Vec<PathBuf>,
-    orden: Vec<usize>,
+    // Playlist
+    folder: Option<PathBuf>,
+    tracks: Vec<PathBuf>,
+    order: Vec<usize>,
     pos: usize,
-    actual: Option<usize>,
-    azar: Azar,
-    // Info de la pista actual
-    generacion: u64,
-    meta: Option<Meta>,
-    portada: Option<TextureHandle>,
-    // Interfaz
-    buscando_carpeta: bool,
-    cargando: bool,
-    rx_carpeta: Receiver<PathBuf>,
-    tx_carpeta: Sender<PathBuf>,
-    rx_escaneo: Receiver<ResultadoEscaneo>,
-    tx_escaneo: Sender<ResultadoEscaneo>,
-    generacion_escaneo: u64,
-    rx_meta: Receiver<Meta>,
-    tx_meta: Sender<Meta>,
-    arrastre: Option<f32>,
-    ir_a_actual: bool,
-    fallos_seguidos: usize,
-    saltar_siguiente: bool,
-    estado: String,
+    current: Option<usize>,
+    rng: Rng,
+    // Current track information
+    generation: u64,
+    metadata: Option<Metadata>,
+    cover: Option<TextureHandle>,
+    // UI
+    choosing_folder: bool,
+    loading: bool,
+    folder_rx: Receiver<PathBuf>,
+    folder_tx: Sender<PathBuf>,
+    scan_rx: Receiver<ScanResult>,
+    scan_tx: Sender<ScanResult>,
+    scan_generation: u64,
+    meta_rx: Receiver<Metadata>,
+    meta_tx: Sender<Metadata>,
+    drag_position: Option<f32>,
+    scroll_to_current: bool,
+    consecutive_failures: usize,
+    skip_next: bool,
+    status: String,
 }
 
 impl App {
-    fn nueva(cc: &eframe::CreationContext<'_>) -> Self {
-        aplicar_estilo(&cc.egui_ctx);
-        let config = Config::cargar();
-        let (tx_carpeta, rx_carpeta) = mpsc::channel();
-        let (tx_escaneo, rx_escaneo) = mpsc::channel();
-        let (tx_meta, rx_meta) = mpsc::channel();
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        apply_style(&cc.egui_ctx);
+        let config = Config::load();
+        let (folder_tx, folder_rx) = mpsc::channel();
+        let (scan_tx, scan_rx) = mpsc::channel();
+        let (meta_tx, meta_rx) = mpsc::channel();
         let mut app = App {
             sink: None,
             player: None,
-            carpeta: None,
-            pistas: Vec::new(),
-            orden: Vec::new(),
+            folder: None,
+            tracks: Vec::new(),
+            order: Vec::new(),
             pos: 0,
-            actual: None,
-            azar: Azar::nuevo(),
-            generacion: 0,
-            meta: None,
-            portada: None,
-            buscando_carpeta: false,
-            cargando: false,
-            rx_carpeta,
-            tx_carpeta,
-            rx_escaneo,
-            tx_escaneo,
-            generacion_escaneo: 0,
-            rx_meta,
-            tx_meta,
-            arrastre: None,
-            ir_a_actual: false,
-            fallos_seguidos: 0,
-            saltar_siguiente: false,
-            estado: String::new(),
+            current: None,
+            rng: Rng::new(),
+            generation: 0,
+            metadata: None,
+            cover: None,
+            choosing_folder: false,
+            loading: false,
+            folder_rx,
+            folder_tx,
+            scan_rx,
+            scan_tx,
+            scan_generation: 0,
+            meta_rx,
+            meta_tx,
+            drag_position: None,
+            scroll_to_current: false,
+            consecutive_failures: 0,
+            skip_next: false,
+            status: String::new(),
             config,
         };
-        let inicial = app
+        let initial = app
             .config
-            .carpeta
+            .folder
             .clone()
             .filter(|p| p.is_dir())
-            .unwrap_or_else(carpeta_musica_por_defecto);
-        app.cargar_carpeta(inicial, &cc.egui_ctx);
+            .unwrap_or_else(default_music_folder);
+        app.load_folder(initial, &cc.egui_ctx);
         app
     }
 
-    fn cargar_carpeta(&mut self, dir: PathBuf, ctx: &egui::Context) {
-        self.detener();
-        self.generacion_escaneo = self.generacion_escaneo.wrapping_add(1);
-        let generacion = self.generacion_escaneo;
-        self.pistas.clear();
-        self.orden.clear();
+    fn load_folder(&mut self, dir: PathBuf, ctx: &egui::Context) {
+        self.stop();
+        self.scan_generation = self.scan_generation.wrapping_add(1);
+        let generation = self.scan_generation;
+        self.tracks.clear();
+        self.order.clear();
         self.pos = 0;
-        self.ir_a_actual = false;
-        self.estado.clear();
-        self.cargando = true;
-        self.carpeta = Some(dir.clone());
-        self.config.carpeta = Some(dir.clone());
-        self.config.guardar();
+        self.scroll_to_current = false;
+        self.status.clear();
+        self.loading = true;
+        self.folder = Some(dir.clone());
+        self.config.folder = Some(dir.clone());
+        self.config.save();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title("dimtune".into()));
-        let tx = self.tx_escaneo.clone();
-        let c = ctx.clone();
+        let tx = self.scan_tx.clone();
+        let context = ctx.clone();
         std::thread::spawn(move || {
-            let mut v = Vec::new();
-            escanear(&dir, &mut v, 0);
-            v.sort_by_cached_key(|p| p.to_string_lossy().to_lowercase());
-            let _ = tx.send(ResultadoEscaneo {
-                generacion,
-                carpeta: dir,
-                pistas: v,
+            let mut tracks = Vec::new();
+            scan(&dir, &mut tracks, 0);
+            tracks.sort_by_cached_key(|p| p.to_string_lossy().to_lowercase());
+            let _ = tx.send(ScanResult {
+                generation,
+                folder: dir,
+                tracks,
             });
-            c.request_repaint();
+            context.request_repaint();
         });
     }
 
-    fn reconstruir_orden(&mut self, primero: Option<usize>) {
-        let mut o: Vec<usize> = (0..self.pistas.len()).collect();
-        if self.config.aleatorio {
-            self.azar.mezclar(&mut o);
-            if let Some(p) = primero
-                && let Some(i) = o.iter().position(|&x| x == p)
+    fn rebuild_order(&mut self, first: Option<usize>) {
+        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+        if self.config.shuffle {
+            self.rng.shuffle(&mut order);
+            if let Some(index) = first
+                && let Some(position) = order.iter().position(|&x| x == index)
             {
-                o.swap(0, i);
+                order.swap(0, position);
             }
         }
-        self.orden = o;
-        self.pos = match primero {
-            Some(p) => self.orden.iter().position(|&x| x == p).unwrap_or(0),
+        self.order = order;
+        self.pos = match first {
+            Some(index) => self.order.iter().position(|&x| x == index).unwrap_or(0),
             None => 0,
         };
     }
 
-    fn detener(&mut self) {
+    fn stop(&mut self) {
         self.player = None;
-        self.actual = None;
-        self.meta = None;
-        self.portada = None;
-        self.arrastre = None;
-        self.ir_a_actual = false;
-        self.fallos_seguidos = 0;
-        self.saltar_siguiente = false;
-        self.generacion = self.generacion.wrapping_add(1);
+        self.current = None;
+        self.metadata = None;
+        self.cover = None;
+        self.drag_position = None;
+        self.scroll_to_current = false;
+        self.consecutive_failures = 0;
+        self.skip_next = false;
+        self.generation = self.generation.wrapping_add(1);
     }
 
-    fn asegurar_salida(&mut self) -> bool {
+    fn ensure_output(&mut self) -> bool {
         if self.sink.is_none() {
             match DeviceSinkBuilder::open_default_sink() {
-                Ok(mut s) => {
-                    s.log_on_drop(false);
-                    self.sink = Some(s);
+                Ok(mut sink) => {
+                    sink.log_on_drop(false);
+                    self.sink = Some(sink);
                 }
-                Err(e) => {
-                    self.estado = format!("No se pudo abrir la salida de audio: {e}");
+                Err(error) => {
+                    self.status = format!("Could not open audio output: {error}");
                     return false;
                 }
             }
@@ -434,190 +446,187 @@ impl App {
         true
     }
 
-    fn reproducir_indice(&mut self, idx: usize, ctx: &egui::Context) {
-        let Some(ruta) = self.pistas.get(idx).cloned() else {
+    fn play_index(&mut self, index: usize, ctx: &egui::Context) {
+        let Some(path) = self.tracks.get(index).cloned() else {
             return;
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
             "{} — dimtune",
-            nombre_pista(&ruta)
+            track_name(&path)
         )));
-        self.generacion = self.generacion.wrapping_add(1);
-        let generacion = self.generacion;
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
         self.player = None;
-        self.actual = Some(idx);
-        self.meta = None;
-        self.portada = None;
-        self.arrastre = None;
-        self.saltar_siguiente = false;
-        self.estado.clear();
-        if !self.asegurar_salida() {
+        self.current = Some(index);
+        self.metadata = None;
+        self.cover = None;
+        self.drag_position = None;
+        self.skip_next = false;
+        self.status.clear();
+        if !self.ensure_output() {
             return;
         }
-        let decoder = File::open(&ruta)
+        let decoder = File::open(&path)
             .map_err(|e| e.to_string())
-            .and_then(|f| Decoder::try_from(f).map_err(|e| e.to_string()));
+            .and_then(|file| Decoder::try_from(file).map_err(|e| e.to_string()));
         let decoder = match decoder {
-            Ok(d) => d,
-            Err(e) => {
-                self.estado = format!("No se pudo reproducir {}: {e}", nombre_pista(&ruta));
-                self.fallos_seguidos += 1;
-                self.saltar_siguiente = true;
+            Ok(decoder) => decoder,
+            Err(error) => {
+                self.status = format!("Could not play {}: {error}", track_name(&path));
+                self.consecutive_failures += 1;
+                self.skip_next = true;
                 ctx.request_repaint();
                 return;
             }
         };
-        self.fallos_seguidos = 0;
+        self.consecutive_failures = 0;
         let Some(sink) = self.sink.as_ref() else {
             return;
         };
         let player = Player::connect_new(sink.mixer());
-        player.set_volume(self.config.volumen);
+        player.set_volume(self.config.volume);
         player.append(decoder);
-        // El anterior (si existía) se detiene al soltarse.
+        // The previous player (if any) stops when dropped.
         self.player = Some(player);
-        self.ir_a_actual = true;
-        let (tx, c) = (self.tx_meta.clone(), ctx.clone());
+        self.scroll_to_current = true;
+        let (tx, context) = (self.meta_tx.clone(), ctx.clone());
         std::thread::spawn(move || {
-            let _ = tx.send(leer_meta(generacion, &ruta));
-            c.request_repaint();
+            let _ = tx.send(read_metadata(generation, &path));
+            context.request_repaint();
         });
     }
 
-    fn reproducir_en_pos(&mut self, pos: usize, ctx: &egui::Context) {
-        if self.orden.is_empty() {
+    fn play_position(&mut self, pos: usize, ctx: &egui::Context) {
+        if self.order.is_empty() {
             return;
         }
-        self.pos = pos % self.orden.len();
-        let idx = self.orden[self.pos];
-        self.reproducir_indice(idx, ctx);
+        self.pos = pos % self.order.len();
+        let index = self.order[self.pos];
+        self.play_index(index, ctx);
     }
 
-    fn siguiente(&mut self, ctx: &egui::Context) {
-        if self.orden.is_empty() {
+    fn next_track(&mut self, ctx: &egui::Context) {
+        if self.order.is_empty() {
             return;
         }
-        let mut p = self.pos + 1;
-        if p >= self.orden.len() {
-            p = 0;
-            if self.config.aleatorio {
-                let actual = self.actual;
-                self.reconstruir_orden(None);
-                // Evita repetir la misma canción justo al reiniciar la ronda.
-                if self.orden.len() > 1 && actual == Some(self.orden[0]) {
-                    self.orden.swap(0, 1);
+        let mut pos = self.pos + 1;
+        if pos >= self.order.len() {
+            pos = 0;
+            if self.config.shuffle {
+                let current = self.current;
+                self.rebuild_order(None);
+                // Avoid repeating the same song right after a new round starts.
+                if self.order.len() > 1 && current == Some(self.order[0]) {
+                    self.order.swap(0, 1);
                 }
             }
         }
-        self.reproducir_en_pos(p, ctx);
+        self.play_position(pos, ctx);
     }
 
-    fn anterior(&mut self, ctx: &egui::Context) {
-        if self.orden.is_empty() {
+    fn previous_track(&mut self, ctx: &egui::Context) {
+        if self.order.is_empty() {
             return;
         }
-        // Si ya avanzó unos segundos, vuelve al inicio de la pista.
-        if let Some(pl) = &self.player
-            && pl.get_pos() > Duration::from_secs(4)
+        // If the track has already played for a few seconds, restart it.
+        if let Some(player) = &self.player
+            && player.get_pos() > Duration::from_secs(4)
         {
-            let _ = pl.try_seek(Duration::ZERO);
+            let _ = player.try_seek(Duration::ZERO);
             return;
         }
-        let p = if self.pos == 0 {
-            self.orden.len() - 1
+        let pos = if self.pos == 0 {
+            self.order.len() - 1
         } else {
             self.pos - 1
         };
-        self.reproducir_en_pos(p, ctx);
+        self.play_position(pos, ctx);
     }
 
-    fn alternar_pausa(&mut self, ctx: &egui::Context) {
+    fn toggle_pause(&mut self, ctx: &egui::Context) {
         match &self.player {
-            Some(p) => {
-                if p.is_paused() {
-                    p.play();
+            Some(player) => {
+                if player.is_paused() {
+                    player.play();
                 } else {
-                    p.pause();
+                    player.pause();
                 }
             }
             None => {
-                if !self.orden.is_empty() {
-                    self.fallos_seguidos = 0;
-                    self.saltar_siguiente = false;
-                    if let Some(i) = self.actual {
-                        self.reproducir_indice(i, ctx);
+                if !self.order.is_empty() {
+                    self.consecutive_failures = 0;
+                    self.skip_next = false;
+                    if let Some(index) = self.current {
+                        self.play_index(index, ctx);
                     } else {
-                        self.reproducir_en_pos(self.pos, ctx);
+                        self.play_position(self.pos, ctx);
                     }
                 }
             }
         }
     }
 
-    fn elegir_carpeta(&mut self, ctx: &egui::Context) {
-        if self.buscando_carpeta {
+    fn choose_folder(&mut self, ctx: &egui::Context) {
+        if self.choosing_folder {
             return;
         }
-        self.buscando_carpeta = true;
-        let tx = self.tx_carpeta.clone();
-        let c = ctx.clone();
-        let inicio = self
-            .carpeta
-            .clone()
-            .unwrap_or_else(carpeta_musica_por_defecto);
+        self.choosing_folder = true;
+        let tx = self.folder_tx.clone();
+        let context = ctx.clone();
+        let start = self.folder.clone().unwrap_or_else(default_music_folder);
         std::thread::spawn(move || {
-            let r = rfd::FileDialog::new()
-                .set_title("Elegir carpeta de música")
-                .set_directory(inicio)
+            let result = rfd::FileDialog::new()
+                .set_title("Choose music folder")
+                .set_directory(start)
                 .pick_folder();
-            // Siempre responde (incluso si se cancela) para liberar el botón.
-            let _ = tx.send(r.unwrap_or_default());
-            c.request_repaint();
+            // Always respond (even if cancelled) so the button is re-enabled.
+            let _ = tx.send(result.unwrap_or_default());
+            context.request_repaint();
         });
     }
 }
 
-fn nombre_pista(p: &Path) -> String {
-    p.file_stem()
+fn track_name(path: &Path) -> String {
+    path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
-// ─────────────────────────────── estilo ───────────────────────────────
+// ─────────────────────────────── style ───────────────────────────────
 
-fn aplicar_estilo(ctx: &egui::Context) {
+fn apply_style(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
-    let mut v = egui::Visuals::dark();
-    let fondo = Color32::from_rgb(0x12, 0x12, 0x13);
+    let mut visuals = egui::Visuals::dark();
+    let background = Color32::from_rgb(0x12, 0x12, 0x13);
     let panel = Color32::from_rgb(0x18, 0x18, 0x1a);
-    let texto = Color32::from_rgb(0xc8, 0xc8, 0xc8);
-    v.panel_fill = fondo;
-    v.window_fill = fondo;
-    v.extreme_bg_color = Color32::from_rgb(0x0d, 0x0d, 0x0e);
-    v.override_text_color = Some(texto);
-    v.window_shadow = egui::Shadow::NONE;
-    v.popup_shadow = egui::Shadow::NONE;
-    v.selection.bg_fill = Color32::from_rgb(0x2b, 0x3a, 0x4a);
-    v.selection.stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0xdd, 0xdd, 0xdd));
-    v.widgets.noninteractive.bg_fill = panel;
-    v.widgets.noninteractive.bg_stroke =
+    let text = Color32::from_rgb(0xc8, 0xc8, 0xc8);
+    visuals.panel_fill = background;
+    visuals.window_fill = background;
+    visuals.extreme_bg_color = Color32::from_rgb(0x0d, 0x0d, 0x0e);
+    visuals.override_text_color = Some(text);
+    visuals.window_shadow = egui::Shadow::NONE;
+    visuals.popup_shadow = egui::Shadow::NONE;
+    visuals.selection.bg_fill = Color32::from_rgb(0x2b, 0x3a, 0x4a);
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, Color32::from_rgb(0xdd, 0xdd, 0xdd));
+    visuals.widgets.noninteractive.bg_fill = panel;
+    visuals.widgets.noninteractive.bg_stroke =
         egui::Stroke::new(1.0_f32, Color32::from_rgb(0x26, 0x26, 0x29));
-    v.widgets.inactive.bg_fill = Color32::from_rgb(0x22, 0x22, 0x25);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x22, 0x22, 0x25);
-    v.widgets.hovered.bg_fill = Color32::from_rgb(0x2e, 0x2e, 0x32);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x2e, 0x2e, 0x32);
-    v.widgets.active.bg_fill = Color32::from_rgb(0x38, 0x38, 0x3d);
-    v.widgets.active.weak_bg_fill = Color32::from_rgb(0x38, 0x38, 0x3d);
-    ctx.set_visuals(v);
+    visuals.widgets.inactive.bg_fill = Color32::from_rgb(0x22, 0x22, 0x25);
+    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x22, 0x22, 0x25);
+    visuals.widgets.hovered.bg_fill = Color32::from_rgb(0x2e, 0x2e, 0x32);
+    visuals.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x2e, 0x2e, 0x32);
+    visuals.widgets.active.bg_fill = Color32::from_rgb(0x38, 0x38, 0x3d);
+    visuals.widgets.active.weak_bg_fill = Color32::from_rgb(0x38, 0x38, 0x3d);
+    ctx.set_visuals(visuals);
 
-    ctx.style_mut(|s| {
-        s.animation_time = 0.0; // sin animaciones
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(10.0, 4.0);
-        s.interaction.tooltip_delay = 0.6;
-        s.scroll_animation = egui::style::ScrollAnimation::none();
-        for f in s.text_styles.values_mut() {
-            f.size = (f.size * 1.08).round();
+    ctx.style_mut(|style| {
+        style.animation_time = 0.0; // no animations
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(10.0, 4.0);
+        style.interaction.tooltip_delay = 0.6;
+        style.scroll_animation = egui::style::ScrollAnimation::none();
+        for font in style.text_styles.values_mut() {
+            font.size = (font.size * 1.08).round();
         }
     });
 }
@@ -626,292 +635,300 @@ fn aplicar_estilo(ctx: &egui::Context) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // — eventos de hilos —
-        while let Ok(p) = self.rx_carpeta.try_recv() {
-            self.buscando_carpeta = false;
-            if p.is_dir() {
-                self.cargar_carpeta(p, ctx);
+        // — thread events —
+        while let Ok(path) = self.folder_rx.try_recv() {
+            self.choosing_folder = false;
+            if path.is_dir() {
+                self.load_folder(path, ctx);
             }
         }
-        while let Ok(r) = self.rx_escaneo.try_recv() {
-            if r.generacion == self.generacion_escaneo {
-                self.pistas = r.pistas;
-                self.carpeta = Some(r.carpeta.clone());
-                self.config.carpeta = Some(r.carpeta);
-                self.reconstruir_orden(None);
-                self.cargando = false;
-                self.ir_a_actual = false;
-                self.estado = if self.pistas.is_empty() {
-                    "No se encontró música en esta carpeta".into()
+        while let Ok(result) = self.scan_rx.try_recv() {
+            if result.generation == self.scan_generation {
+                self.tracks = result.tracks;
+                self.folder = Some(result.folder.clone());
+                self.config.folder = Some(result.folder);
+                self.rebuild_order(None);
+                self.loading = false;
+                self.scroll_to_current = false;
+                self.status = if self.tracks.is_empty() {
+                    "No music found in this folder".into()
                 } else {
                     String::new()
                 };
             }
         }
-        // Un fallo de decodificación se salta en el siguiente frame para no
-        // encadenar llamadas recursivas ni congelar la interfaz.
-        if self.saltar_siguiente {
-            self.saltar_siguiente = false;
-            if self.fallos_seguidos < self.pistas.len().max(1) {
-                self.siguiente(ctx);
+        // A decode failure is skipped on the next frame to avoid chaining
+        // recursive calls or freezing the UI.
+        if self.skip_next {
+            self.skip_next = false;
+            if self.consecutive_failures < self.tracks.len().max(1) {
+                self.next_track(ctx);
             }
         }
-        while let Ok(m) = self.rx_meta.try_recv() {
-            if m.generacion == self.generacion {
-                self.portada = m
-                    .portada
+        while let Ok(metadata) = self.meta_rx.try_recv() {
+            if metadata.generation == self.generation {
+                self.cover = metadata
+                    .cover
                     .as_ref()
-                    .map(|img| ctx.load_texture("portada", img.clone(), TextureOptions::LINEAR));
-                self.meta = Some(m);
+                    .map(|image| ctx.load_texture("cover", image.clone(), TextureOptions::LINEAR));
+                self.metadata = Some(metadata);
             }
         }
 
-        // — fin de pista → siguiente automáticamente —
-        let terminada = self.player.as_ref().is_some_and(|p| p.empty());
-        if terminada {
-            self.siguiente(ctx);
+        // — end of track → next automatically —
+        let finished = self.player.as_ref().is_some_and(|player| player.empty());
+        if finished {
+            self.next_track(ctx);
         }
 
-        // — atajos —
+        // — shortcuts —
         if !ctx.wants_keyboard_input() {
-            let (espacio, der, izq) = ctx.input(|i| {
+            let (space, right, left) = ctx.input(|input| {
                 (
-                    i.key_pressed(Key::Space),
-                    i.key_pressed(Key::ArrowRight),
-                    i.key_pressed(Key::ArrowLeft),
+                    input.key_pressed(Key::Space),
+                    input.key_pressed(Key::ArrowRight),
+                    input.key_pressed(Key::ArrowLeft),
                 )
             });
-            if espacio {
-                self.alternar_pausa(ctx);
+            if space {
+                self.toggle_pause(ctx);
             }
-            if der {
-                self.fallos_seguidos = 0;
-                self.saltar_siguiente = false;
-                self.siguiente(ctx);
+            if right {
+                self.consecutive_failures = 0;
+                self.skip_next = false;
+                self.next_track(ctx);
             }
-            if izq {
-                self.fallos_seguidos = 0;
-                self.saltar_siguiente = false;
-                self.anterior(ctx);
+            if left {
+                self.consecutive_failures = 0;
+                self.skip_next = false;
+                self.previous_track(ctx);
             }
         }
 
-        let en_pausa = self.player.as_ref().is_some_and(|p| p.is_paused());
-        let sonando = self.player.is_some() && !en_pausa;
+        let paused = self
+            .player
+            .as_ref()
+            .is_some_and(|player| player.is_paused());
+        let playing = self.player.is_some() && !paused;
 
-        // — barra superior —
-        egui::TopBottomPanel::top("arriba").show(ctx, |ui| {
+        // — top bar —
+        egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(!self.buscando_carpeta, egui::Button::new("Carpeta…"))
+                    .add_enabled(!self.choosing_folder, egui::Button::new("Folder…"))
                     .clicked()
                 {
-                    self.elegir_carpeta(ctx);
+                    self.choose_folder(ctx);
                 }
-                let ruta = self
-                    .carpeta
+                let path = self
+                    .folder
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                ui.add(egui::Label::new(RichText::new(ruta).weak()).truncate());
+                ui.add(egui::Label::new(RichText::new(path).weak()).truncate());
             });
             ui.add_space(2.0);
         });
 
-        // — controles —
-        egui::TopBottomPanel::bottom("abajo").show(ctx, |ui| {
+        // — controls —
+        egui::TopBottomPanel::bottom("bottom").show(ctx, |ui| {
             ui.add_space(6.0);
-            // progreso
-            let dur = self.meta.as_ref().and_then(|m| m.duracion);
-            let pos_real = self
+            // progress
+            let duration = self.metadata.as_ref().and_then(|m| m.duration);
+            let real_position = self
                 .player
                 .as_ref()
-                .map(|p| p.get_pos())
+                .map(|player| player.get_pos())
                 .unwrap_or_default();
-            let pos_seg = self.arrastre.unwrap_or(pos_real.as_secs_f32());
-            let pos_mostrada = dur.map(|d| pos_seg.min(d.as_secs_f32())).unwrap_or(pos_seg);
-            let total = dur.map(|d| d.as_secs_f32()).unwrap_or(0.0).max(0.1);
+            let position_seconds = self.drag_position.unwrap_or(real_position.as_secs_f32());
+            let displayed_position = duration
+                .map(|d| position_seconds.min(d.as_secs_f32()))
+                .unwrap_or(position_seconds);
+            let total = duration.map(|d| d.as_secs_f32()).unwrap_or(0.0).max(0.1);
             ui.horizontal(|ui| {
-                ui.label(formatear(Duration::from_secs_f32(pos_mostrada)));
-                let mut valor = pos_seg.min(total);
+                ui.label(format_duration(Duration::from_secs_f32(displayed_position)));
+                let mut value = position_seconds.min(total);
                 ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(80.0);
-                let r = ui.add_enabled(
-                    dur.is_some() && self.player.is_some(),
-                    egui::Slider::new(&mut valor, 0.0..=total).show_value(false),
+                let response = ui.add_enabled(
+                    duration.is_some() && self.player.is_some(),
+                    egui::Slider::new(&mut value, 0.0..=total).show_value(false),
                 );
-                if r.changed() {
-                    self.arrastre = Some(valor);
+                if response.changed() {
+                    self.drag_position = Some(value);
                 }
-                if (r.drag_stopped() || (r.changed() && !r.dragged()))
-                    && let (Some(p), Some(v)) = (&self.player, self.arrastre.take())
+                if (response.drag_stopped() || (response.changed() && !response.dragged()))
+                    && let (Some(player), Some(value)) = (&self.player, self.drag_position.take())
                 {
-                    let _ = p.try_seek(Duration::from_secs_f32(v));
+                    let _ = player.try_seek(Duration::from_secs_f32(value));
                 }
-                ui.label(dur.map(formatear).unwrap_or_else(|| "--:--".into()));
+                ui.label(
+                    duration
+                        .map(format_duration)
+                        .unwrap_or_else(|| "--:--".into()),
+                );
             });
-            // botones
+            // buttons
             ui.horizontal(|ui| {
-                if ui.button("Anterior").clicked() {
-                    self.fallos_seguidos = 0;
-                    self.saltar_siguiente = false;
-                    self.anterior(ctx);
+                if ui.button("Previous").clicked() {
+                    self.consecutive_failures = 0;
+                    self.skip_next = false;
+                    self.previous_track(ctx);
                 }
-                let txt = if sonando { "Pausa" } else { "Reproducir" };
+                let label = if playing { "Pause" } else { "Play" };
                 if ui
-                    .add(egui::Button::new(txt).min_size(egui::vec2(96.0, 0.0)))
+                    .add(egui::Button::new(label).min_size(egui::vec2(96.0, 0.0)))
                     .clicked()
                 {
-                    self.alternar_pausa(ctx);
+                    self.toggle_pause(ctx);
                 }
-                if ui.button("Siguiente").clicked() {
-                    self.fallos_seguidos = 0;
-                    self.saltar_siguiente = false;
-                    self.siguiente(ctx);
+                if ui.button("Next").clicked() {
+                    self.consecutive_failures = 0;
+                    self.skip_next = false;
+                    self.next_track(ctx);
                 }
                 ui.separator();
-                let mut alea = self.config.aleatorio;
-                if ui.checkbox(&mut alea, "Aleatorio").changed() {
-                    self.config.aleatorio = alea;
-                    self.fallos_seguidos = 0;
-                    self.saltar_siguiente = false;
-                    self.reconstruir_orden(self.actual);
-                    self.config.guardar();
+                let mut shuffle = self.config.shuffle;
+                if ui.checkbox(&mut shuffle, "Shuffle").changed() {
+                    self.config.shuffle = shuffle;
+                    self.consecutive_failures = 0;
+                    self.skip_next = false;
+                    self.rebuild_order(self.current);
+                    self.config.save();
                 }
                 ui.separator();
                 ui.label("Vol");
-                let mut vol = self.config.volumen;
+                let mut volume = self.config.volume;
                 ui.spacing_mut().slider_width = 110.0;
-                let r = ui.add(egui::Slider::new(&mut vol, 0.0..=1.0).show_value(false));
-                if r.changed() {
-                    self.config.volumen = vol;
-                    if let Some(p) = &self.player {
-                        p.set_volume(vol);
+                let response = ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false));
+                if response.changed() {
+                    self.config.volume = volume;
+                    if let Some(player) = &self.player {
+                        player.set_volume(volume);
                     }
                 }
-                if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                    self.config.guardar();
+                if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                    self.config.save();
                 }
             });
             ui.add_space(6.0);
         });
 
-        // — centro: portada + info + lista —
+        // — center: cover + info + list —
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(LADO_PORTADA, LADO_PORTADA),
-                    egui::Sense::hover(),
-                );
+                let (rect, _) = ui
+                    .allocate_exact_size(egui::vec2(COVER_SIZE, COVER_SIZE), egui::Sense::hover());
                 ui.painter()
                     .rect_filled(rect, 2.0, Color32::from_rgb(0x0d, 0x0d, 0x0e));
-                if let Some(t) = &self.portada {
-                    let s = t.size_vec2();
-                    let escala = (LADO_PORTADA / s.x).min(LADO_PORTADA / s.y);
-                    let r = egui::Rect::from_center_size(rect.center(), s * escala);
+                if let Some(texture) = &self.cover {
+                    let size = texture.size_vec2();
+                    let scale = (COVER_SIZE / size.x).min(COVER_SIZE / size.y);
+                    let image_rect = egui::Rect::from_center_size(rect.center(), size * scale);
                     ui.painter().image(
-                        t.id(),
-                        r,
+                        texture.id(),
+                        image_rect,
                         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
                 }
                 ui.vertical(|ui| {
                     ui.add_space(6.0);
-                    if let Some(i) = self.actual {
-                        let ruta = &self.pistas[i];
-                        let titulo = self
-                            .meta
+                    if let Some(index) = self.current {
+                        let path = &self.tracks[index];
+                        let title = self
+                            .metadata
                             .as_ref()
-                            .and_then(|m| m.titulo.clone())
-                            .unwrap_or_else(|| nombre_pista(ruta));
+                            .and_then(|m| m.title.clone())
+                            .unwrap_or_else(|| track_name(path));
                         ui.add(
-                            egui::Label::new(RichText::new(titulo).size(20.0).strong()).truncate(),
+                            egui::Label::new(RichText::new(title).size(20.0).strong()).truncate(),
                         );
-                        if let Some(m) = &self.meta {
-                            if let Some(a) = &m.artista {
-                                ui.add(egui::Label::new(a.as_str()).truncate());
+                        if let Some(metadata) = &self.metadata {
+                            if let Some(artist) = &metadata.artist {
+                                ui.add(egui::Label::new(artist.as_str()).truncate());
                             }
-                            if let Some(a) = &m.album {
+                            if let Some(album) = &metadata.album {
                                 ui.add(
-                                    egui::Label::new(RichText::new(a.as_str()).weak()).truncate(),
+                                    egui::Label::new(RichText::new(album.as_str()).weak())
+                                        .truncate(),
                                 );
                             }
                         }
                     } else {
-                        ui.label(RichText::new("Nada en reproducción").weak());
+                        ui.label(RichText::new("Nothing playing").weak());
                     }
                     ui.add_space(8.0);
-                    if self.cargando {
-                        ui.label(RichText::new("Cargando…").weak());
-                    } else if !self.estado.is_empty() {
+                    if self.loading {
+                        ui.label(RichText::new("Loading…").weak());
+                    } else if !self.status.is_empty() {
                         ui.add(
                             egui::Label::new(
-                                RichText::new(&self.estado)
+                                RichText::new(&self.status)
                                     .color(Color32::from_rgb(0xd0, 0x8a, 0x6a)),
                             )
                             .wrap(),
                         );
                     } else {
-                        let texto = if self.pistas.len() == 1 {
-                            "1 canción".to_string()
+                        let text = if self.tracks.len() == 1 {
+                            "1 track".to_string()
                         } else {
-                            format!("{} canciones", self.pistas.len())
+                            format!("{} tracks", self.tracks.len())
                         };
-                        ui.label(RichText::new(texto).weak());
+                        ui.label(RichText::new(text).weak());
                     }
                 });
             });
             ui.add_space(6.0);
             ui.separator();
 
-            let total = self.pistas.len();
-            let mut sc = egui::ScrollArea::vertical().auto_shrink([false, false]);
-            if self.ir_a_actual {
-                if let Some(i) = self.actual {
-                    sc = sc.vertical_scroll_offset(
-                        (i as f32 * (FILA_ALTO + ui.spacing().item_spacing.y) - 60.0).max(0.0),
+            let total = self.tracks.len();
+            let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            if self.scroll_to_current {
+                if let Some(index) = self.current {
+                    scroll = scroll.vertical_scroll_offset(
+                        (index as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y) - 60.0).max(0.0),
                     );
                 }
-                self.ir_a_actual = false;
+                self.scroll_to_current = false;
             }
-            let mut elegido: Option<usize> = None;
-            sc.show_rows(ui, FILA_ALTO, total, |ui, rango| {
-                for i in rango {
-                    let sel = self.actual == Some(i);
-                    let nombre = nombre_pista(&self.pistas[i]);
-                    let r = ui.add_sized(
-                        [ui.available_width(), FILA_ALTO],
-                        egui::Button::selectable(sel, nombre)
+            let mut selected: Option<usize> = None;
+            scroll.show_rows(ui, ROW_HEIGHT, total, |ui, range| {
+                for index in range {
+                    let is_selected = self.current == Some(index);
+                    let name = track_name(&self.tracks[index]);
+                    let response = ui.add_sized(
+                        [ui.available_width(), ROW_HEIGHT],
+                        egui::Button::selectable(is_selected, name)
                             .truncate()
                             .frame_when_inactive(false),
                     );
-                    if r.clicked() {
-                        elegido = Some(i);
+                    if response.clicked() {
+                        selected = Some(index);
                     }
                 }
             });
-            if let Some(i) = elegido {
-                self.fallos_seguidos = 0;
-                self.saltar_siguiente = false;
-                self.reconstruir_orden(Some(i));
-                self.reproducir_indice(i, ctx);
+            if let Some(index) = selected {
+                self.consecutive_failures = 0;
+                self.skip_next = false;
+                self.rebuild_order(Some(index));
+                self.play_index(index, ctx);
             }
         });
 
-        // Solo despierta periódicamente mientras suena (progreso + siguiente pista).
-        if sonando {
+        // Only wake up periodically while playing (progress + next track).
+        if playing {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.config.guardar();
+        self.config.save();
     }
 }
 
 fn main() -> eframe::Result {
-    let opciones = eframe::NativeOptions {
+    let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([720.0, 520.0])
             .with_min_inner_size([520.0, 360.0])
@@ -921,103 +938,102 @@ fn main() -> eframe::Result {
     };
     eframe::run_native(
         "dimtune",
-        opciones,
-        Box::new(|cc| Ok(Box::new(App::nueva(cc)))),
+        options,
+        Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
 }
 
 #[cfg(test)]
-mod pruebas {
+mod tests {
     use super::*;
     use std::fs;
 
-    fn dir_temporal() -> PathBuf {
-        let n = SystemTime::now()
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let p = std::env::temp_dir().join(format!("dimtune-test-{}-{n}", std::process::id()));
-        fs::create_dir_all(&p).unwrap();
-        p
+        let path =
+            std::env::temp_dir().join(format!("dimtune-test-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 
     #[test]
-    fn formato_de_duraciones() {
-        assert_eq!(formatear(Duration::from_secs(0)), "0:00");
-        assert_eq!(formatear(Duration::from_secs(59)), "0:59");
-        assert_eq!(formatear(Duration::from_secs(60)), "1:00");
-        assert_eq!(formatear(Duration::from_secs(3599)), "59:59");
-        assert_eq!(formatear(Duration::from_secs(3600)), "1:00:00");
-        assert_eq!(formatear(Duration::from_secs(3661)), "1:01:01");
+    fn duration_formatting() {
+        assert_eq!(format_duration(Duration::from_secs(0)), "0:00");
+        assert_eq!(format_duration(Duration::from_secs(59)), "0:59");
+        assert_eq!(format_duration(Duration::from_secs(60)), "1:00");
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59:59");
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1:00:00");
+        assert_eq!(format_duration(Duration::from_secs(3661)), "1:01:01");
     }
 
     #[test]
-    fn nombre_sin_extension() {
-        assert_eq!(nombre_pista(Path::new("/musica/cancion.mp3")), "cancion");
+    fn name_without_extension() {
+        assert_eq!(track_name(Path::new("/music/song.mp3")), "song");
     }
 
     #[test]
-    fn mezcla_es_una_permutacion() {
-        let mut v: Vec<usize> = (0..64).collect();
-        let original = v.clone();
-        Azar(1).mezclar(&mut v);
-        let mut ordenado = v.clone();
-        ordenado.sort_unstable();
-        assert_eq!(ordenado, original);
-        assert_ne!(v, original);
+    fn shuffle_is_a_permutation() {
+        let mut values: Vec<usize> = (0..64).collect();
+        let original = values.clone();
+        Rng(1).shuffle(&mut values);
+        let mut sorted = values.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, original);
+        assert_ne!(values, original);
     }
 
     #[test]
-    fn config_desde_texto() {
-        let c = Config::desde_texto(
-            "carpeta=/tmp/musica\naleatorio=1\nvolumen=1.7\ndesconocido=valor\n",
-        );
-        assert_eq!(c.carpeta, Some(PathBuf::from("/tmp/musica")));
-        assert!(c.aleatorio);
-        assert_eq!(c.volumen, 1.0);
+    fn config_from_text() {
+        let config = Config::from_text("folder=/tmp/music\nshuffle=1\nvolume=1.7\nunknown=value\n");
+        assert_eq!(config.folder, Some(PathBuf::from("/tmp/music")));
+        assert!(config.shuffle);
+        assert_eq!(config.volume, 1.0);
 
-        let d = Config::desde_texto("volumen=-0.5\n");
-        assert_eq!(d.volumen, 0.0);
-        assert_eq!(d.carpeta, None);
-        assert!(!d.aleatorio);
+        let config = Config::from_text("volume=-0.5\n");
+        assert_eq!(config.volume, 0.0);
+        assert_eq!(config.folder, None);
+        assert!(!config.shuffle);
 
-        assert_eq!(Config::desde_texto("volumen=NaN\n").volumen, 0.8);
-        assert_eq!(Config::desde_texto("carpeta=\n").carpeta, None);
+        assert_eq!(Config::from_text("volume=NaN\n").volume, 0.8);
+        assert_eq!(Config::from_text("folder=\n").folder, None);
     }
 
     #[test]
-    fn escaneo_recursivo_y_extensiones() {
-        let base = dir_temporal();
+    fn recursive_scan_and_extensions() {
+        let base = temp_dir();
         let sub = base.join("sub");
-        let profundo = sub.join("mas");
-        fs::create_dir_all(&profundo).unwrap();
-        for nombre in ["a.mp3", "B.FLAC", "nota.txt"] {
-            fs::write(base.join(nombre), b"").unwrap();
+        let deep = sub.join("more");
+        fs::create_dir_all(&deep).unwrap();
+        for name in ["a.mp3", "B.FLAC", "note.txt"] {
+            fs::write(base.join(name), b"").unwrap();
         }
         fs::write(sub.join("c.ogg"), b"").unwrap();
-        fs::write(profundo.join("d.wav"), b"").unwrap();
-        fs::write(profundo.join("e.opus"), b"").unwrap();
+        fs::write(deep.join("d.wav"), b"").unwrap();
+        fs::write(deep.join("e.opus"), b"").unwrap();
 
-        let mut pistas = Vec::new();
-        escanear(&base, &mut pistas, 0);
-        let nombres: Vec<String> = pistas
+        let mut tracks = Vec::new();
+        scan(&base, &mut tracks, 0);
+        let names: Vec<String> = tracks
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(pistas.len(), 4);
-        for nombre in ["a.mp3", "B.FLAC", "c.ogg", "d.wav"] {
-            assert!(nombres.iter().any(|n| n == nombre), "falta {nombre}");
+        assert_eq!(tracks.len(), 4);
+        for name in ["a.mp3", "B.FLAC", "c.ogg", "d.wav"] {
+            assert!(names.iter().any(|n| n == name), "missing {name}");
         }
 
         fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
-    fn portada_de_carpeta_sin_distinguir_mayusculas() {
-        let base = dir_temporal();
-        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
+    fn folder_cover_is_case_insensitive() {
+        let base = temp_dir();
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([10, 20, 30, 255]));
         let mut bytes = Vec::new();
-        image::DynamicImage::ImageRgba8(img)
+        image::DynamicImage::ImageRgba8(image)
             .write_to(
                 &mut std::io::Cursor::new(&mut bytes),
                 image::ImageFormat::Png,
@@ -1025,8 +1041,8 @@ mod pruebas {
             .unwrap();
         fs::write(base.join("COVER.PNG"), bytes).unwrap();
 
-        let portada = portada_de_carpeta(&base.join("cancion.mp3")).unwrap();
-        assert!(portada.size[0] > 0 && portada.size[1] > 0);
+        let cover = folder_cover(&base.join("song.mp3")).unwrap();
+        assert!(cover.size[0] > 0 && cover.size[1] > 0);
 
         fs::remove_dir_all(&base).unwrap();
     }
