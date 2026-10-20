@@ -48,6 +48,10 @@ on an older release such as Debian 12 because of the glibc version. For the wide
 compatibility, **build the app on the distribution where you will run it**, or
 build inside a container for the oldest target you want to support.
 
+The prebuilt release is built on Ubuntu 22.04 (glibc 2.35), so it should run on
+Debian 12/13, Ubuntu 22.04 or newer, Linux Mint 21 or newer, and Pop!_OS 22.04 or
+newer. It is **x86_64 only**.
+
 ## Requirements
 
 ### Build requirements
@@ -111,6 +115,29 @@ sudo pacman -S --needed pipewire pipewire-alsa xdg-desktop-portal xdg-desktop-po
 
 If the portal is missing, playback and the default music folder still work; only
 the native folder chooser will not respond.
+
+## Prebuilt release
+
+The [Releases](https://github.com/Abemilek/dimtune/releases) page contains a
+prebuilt x86_64 Linux tarball produced by GitHub Actions. Set `VERSION` to the
+release you downloaded:
+
+```sh
+VERSION=v0.1.0
+tar -xzf "dimtune-${VERSION}-x86_64-linux.tar.gz"
+
+install -Dm755 "dimtune-${VERSION}/dimtune" "$HOME/.local/bin/dimtune"
+install -Dm644 "dimtune-${VERSION}/dimtune.desktop" \
+  "$HOME/.local/share/applications/dimtune.desktop"
+install -Dm644 "dimtune-${VERSION}/dimtune.svg" \
+  "$HOME/.local/share/icons/hicolor/scalable/apps/dimtune.svg"
+
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+```
+
+Release archives include the binary, desktop entry, icon, README, and license. A
+`.sha256` file is published next to each archive.
 
 ## Build and install
 
@@ -292,6 +319,7 @@ instalar.sh          # build + per-user install
 desinstalar.sh       # per-user uninstall
 dimtune.desktop      # desktop entry
 dimtune.svg          # application icon
+.github/workflows/   # CI and tagged release automation
 ```
 
 ## License
